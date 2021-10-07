@@ -76,6 +76,7 @@ function App() {
       </div>
 
       <button onClick={onJoin}>join</button>
+      <button onClick={jitsi.updateConstraits}>update constraits</button>
     </div>
   );
 }

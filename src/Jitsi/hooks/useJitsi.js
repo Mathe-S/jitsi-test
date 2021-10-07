@@ -8,11 +8,9 @@ const useJitsi = (currentUser, isPublicRoom) => {
     const defaultParams = useMemo(Jitsi.getDefaultParams, [])
     const [mainState, setMainState] = useState("initial")
     const [domain] = useState(defaultParams.domain)
-    const [room, setRoom] = useState(null)
+    const [room, setRoom] = useState("mathe-test")
     const [connection, setConnection] = useState(null)
     const [conference, setConference] = useState(null)
-    const [desktopConnection, setDesktopConnection] = useState(null)
-    const [desktopConference, setDesktopConference] = useState(null)
     const { tracks, addTrack, removeTrack, videoTracks, audioTracks, getTracks, setTracks, activeSpeakers, lastSpeaker } = useTracks()
     const { tracks: desktopTracks, addTrack: addDesktopTrack, removeTrack: removeDesktopTrack } = useTracks()
     const [participants, setParticipants] = useState([])
@@ -87,8 +85,6 @@ const useJitsi = (currentUser, isPublicRoom) => {
                     facingMode: "user",
                 }, true),
             ])).filter(p => p.status === "fulfilled").map(p => p.value)
-
-            console.log("🚀 ~ file: useJitsi.js ~ line 81 ~ returnnewPromise ~ localAudioTracks", localAudioTracks)
 
             const localTracks = [...localAudioTracks || [], ...localVideoTracks || []]
 
@@ -174,6 +170,8 @@ const useJitsi = (currentUser, isPublicRoom) => {
         conference.setSenderVideoConstraint(720)
         conference.setReceiverVideoConstraint(720)
 
+        window.conference = conference
+
         setParticipants(prevState => [
             ...prevState,
             ...conference.getParticipants().map(participant => participant.getId())
@@ -195,19 +193,8 @@ const useJitsi = (currentUser, isPublicRoom) => {
         conference.on(JitsiMeetJS.events.conference.TRACK_REMOVED, removeTrack)
         conference.on(JitsiMeetJS.events.conference.P2P_STATUS, event => onP2PChange(event, conference));
 
-        const desktopUserInfo = {
-            id: Math.random() + "_desktop",
-            name: Math.random() + "(Screen Share)",
-        }
-
-        let desktopConnection = await Jitsi.connect({ domain, room, config })
-        setDesktopConnection(desktopConnection)
-        let desktopConference = await Jitsi.join(
-            { connection: desktopConnection, room: room + "_sc", currentUser: desktopUserInfo })
-        setDesktopConference(desktopConference)
-        setIsDesktopSharingAvailable(JitsiMeetJS.isDesktopSharingEnabled())
-        desktopConference.on(JitsiMeetJS.events.conference.TRACK_ADDED, addDesktopTrack);
-        desktopConference.on(JitsiMeetJS.events.conference.TRACK_REMOVED, removeDesktopTrack);
+        conference.on(JitsiMeetJS.events.connectionQuality.REMOTE_STATS_UPDATED, (id) => console.log("🚀 ~ file: useJitsi.js ~ line 202 ~ connect ~ data", id))
+        conference.on(JitsiMeetJS.events.connectionQuality.LOCAL_STATS_UPDATED, (id) => console.log("🚀 ~ file: useJitsi.js ~ line 201 ~ connect ~ data", id))
 
         setMainState("started")
     }, [domain, room, tracks, desktopTracks, setIsDesktopSharingAvailable, currentUser, isPublicRoom])
@@ -220,14 +207,9 @@ const useJitsi = (currentUser, isPublicRoom) => {
             Jitsi.disconnect(connection).catch((e) => { console.log(e) })
             setMainState("")
         })
-        if (desktopConference) {
-            desktopConference.getLocalTracks().forEach(localTrack => localTrack.dispose())
-            Jitsi.leave(desktopConference).catch((e) => { console.log(e) }).finally(() => {
-                Jitsi.disconnect(desktopConnection).catch((e) => { console.log(e) })
-            })
-        }
+
         setUserLocationState("left")
-    }, [conference, desktopConference, connection, desktopConnection, tracks, getTracks, setTracks, obtainMediaDevices])
+    }, [conference, connection, tracks, getTracks, setTracks, obtainMediaDevices])
 
     useEffect(() => {
         conference && window.top.postMessage({ callStatus: 'active', callType: isPublicRoom ? 'public' : 'chat' }, '*');
@@ -272,17 +254,6 @@ const useJitsi = (currentUser, isPublicRoom) => {
         })
     }, [audioTracks])
 
-    useEffect(() => {
-        if (desktopTracks.length > 1 && desktopTracks[0].isLocal()) {
-            try {
-                desktopConference.getLocalTracks().forEach(localTrack => localTrack.dispose())
-            } catch (e) {
-                console.error("localTracks", e)
-            }
-            setIsDesktopSharingEnabled(false)
-        }
-    }, [desktopTracks.length])
-
     const toggleTrack = useCallback(async (type) => {
         const isVideo = type === 'camera'
         const isMuted = isVideo ? isCameraMuted : isAudioMuted
@@ -312,45 +283,31 @@ const useJitsi = (currentUser, isPublicRoom) => {
         })
     }, [isAudioMuted, audioTracks, isCameraMuted, videoTracks, conference])
 
-    const toggleDesktopSharing = useCallback(async () => {
-        if (!isDesktopSharingEnabled) {
-            try {
-                const localTracks = await JitsiMeetJS.createLocalTracks({
-                    devices: ["desktop"],
-                    facingMode: "user",
-                }, true)
-
-                localTracks.forEach((localTrack) => {
-                    if (localTrack.getType() === "video") {
-                        desktopConference.addTrack(localTrack)
-                        localTrack.stream.oninactive = () => {
-                            try {
-                                desktopConference.getLocalTracks().forEach(localTrack => localTrack.dispose())
-                            } catch (e) {
-                                console.error("localTracks", e)
-                            }
-                            setIsDesktopSharingEnabled(false)
-                        }
-                    }
-                })
-                setIsDesktopSharingEnabled(true)
-            } catch (e) {
-                setIsDesktopSharingEnabled(false)
+    const updateConstraits = () => {
+        const constraints = {
+            video: {
+                height: {
+                    ideal: 720,
+                    max: 720,
+                    min: 240
+                },
+                width: {
+                    ideal: 1280,
+                    max: 1280,
+                    min: 320
+                }
             }
-        } else {
-            try {
-                desktopConference.getLocalTracks().forEach(localTrack => localTrack.dispose())
-            } catch (e) {
-                console.error("localTracks", e)
-            }
-            setIsDesktopSharingEnabled(false)
         }
-    }, [
-        isDesktopSharingEnabled,
-        setIsDesktopSharingEnabled,
-        desktopConference,
-        room,
-    ])
+
+        const ids = conference.getParticipants().map(participant => participant.getId());
+        constraints.onStageEndpoints = ids
+        constraints.selectedEndpoints = ids
+        conference.setReceiverConstraints(constraints)
+        conference.setSenderVideoConstraint(720)
+        conference.setReceiverVideoConstraint(720)
+        conference.selectParticipants(ids);
+
+    }
 
     return {
         room,
@@ -366,7 +323,6 @@ const useJitsi = (currentUser, isPublicRoom) => {
         videoTracks,
         desktopTracks,
         toggleTrack,
-        toggleDesktopSharing,
         connect,
         mainState,
         loading,
@@ -385,7 +341,8 @@ const useJitsi = (currentUser, isPublicRoom) => {
         userLocationState,
         dominnatSpeaker,
         noAudioInput,
-        disposeLocalTracks
+        disposeLocalTracks,
+        updateConstraits
     }
 }
 
